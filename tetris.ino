@@ -1,4 +1,6 @@
 /*
+Ported to use LedControll 2015 AnneJan IJhack
+
 Author: Jae Yeong Bae
         UBC ECE
         jocker.tistory.com       
@@ -6,34 +8,14 @@ Date:   Jan.18.2013
 File:   Tetris
 Purpose:
         killing time.. + for fun
-          
-Circuits+Pins:
-        Led Matrix:
-        2 74HC575 Shift Registers in order: Green,Blue,Red
-        pins: Latch = 3
-              Clock = 2
-              Data = 4
-              Row Anodes = 5 to 13 (8pins) shared between both matrix
-        buttons (as digital):
-          A4 = left
-          A5 = down
-          A6 = right
-          A7 = up (rotate)
-
+   
 Comment:
         This is my second Arduino Project. 
         Code may be messy and inefficient.
         References from Arduino Library and datasheets.
 */
 
-
-
-
-unsigned char latchPin = 3;
-unsigned char clockPin = 2;
-unsigned char dataPin = 4;
-unsigned char rowPin = 5;
-
+#include "LedControl.h"
 
 long delays = 0;
 short delay_ = 500;
@@ -49,8 +31,23 @@ boolean  pile[8][16];
 
 boolean disp[8][16];
 
+static const int DATA_PIN = 20;
+static const int CLK_PIN  = 5;
+static const int CS_PIN   = 21;
+static const int DISPLAYS = 2;
+
+static const int X_PIN = 4;
+static const int Y_PIN = 5;
+
+LedControl lc=LedControl(DATA_PIN, CLK_PIN, CS_PIN, DISPLAYS);
 
 void setup() {
+  Serial.begin(9600);
+  Serial.println("Booted Tetris");
+  
+//  pinMode(A7, INPUT);
+//  pinMode(A6, INPUT);
+
   int seed = 
   (analogRead(0)+1)*
   (analogRead(1)+1)*
@@ -62,42 +59,19 @@ void setup() {
   randomSeed(seed);  
   random(10,98046);
 
-  
-  cli();//stop interrupts
-
-//set timer0 interrupt at 2kHz
-  TCCR1A = 0;// set entire TCCR0A register to 0
-  TCCR1B = 0;// same for TCCR0B
-  TCNT1  = 0;//initialize counter value to 0
-  // set compare match register for 2khz increments
-  OCR1A = 259;// = (16*10^6) / (2000*64) - 1 (must be <256)
-  // turn on CTC mode
-  TCCR1A |= (1 << WGM01);
-  // Set CS11 and CS10 bits for 1024 prescaler
-  TCCR1B |= (1 << CS12) | (1 << CS10);   
-  // enable timer compare interrupt
-  TIMSK1 |= (1 << OCIE0A);
-
-  sei();//allow interrupts  
-  
-  
-  pinMode(latchPin, OUTPUT);
-  pinMode(clockPin, OUTPUT);
-  pinMode(dataPin, OUTPUT);
-  
-  pinMode(A7, INPUT); //up
-  pinMode(A6, INPUT); //right
-  pinMode(A5, INPUT); //left
-  pinMode(A4, INPUT); //down 
-  
-  int i;
-  for(i=0;i<8;i++)
-    pinMode(rowPin+i,OUTPUT);
-  
+  // The MAX72XX is in power-saving mode on startup,
+  // we have to do a wakeup call
+  lc.shutdown(0, false);
+  lc.shutdown(1, false);
+  // Set the brightness
+  lc.setIntensity(0, 15);
+  lc.setIntensity(1, 15);
+  // and clear the display
+  lc.clearDisplay(0);
+  lc.clearDisplay(1);
+    
   newBlock();
   updateLED();    
-
-  Serial.begin(9600);
 }
 
 void loop() {
@@ -111,7 +85,7 @@ void loop() {
    
 
    //buttun actions
-  int button = readBut();
+  int button = readDirection();
   
   if (button == 1) //up=rotate
     rotate();
@@ -122,13 +96,11 @@ void loop() {
   if (button == 4) //down=movedown
     movedown();  
   
-  
-  Serial.print(analogRead(A4));
-  Serial.print(analogRead(A5));
-  Serial.print(analogRead(A6));  
-  Serial.println(analogRead(A7));
+  Serial.print(analogRead(X_PIN));
+  Serial.print("|");
+  Serial.println(analogRead(Y_PIN));
    
-
+  LEDRefresh();
 }
 
 boolean moveleft()
@@ -183,32 +155,32 @@ boolean moveright()
   return 0;
 }
 
-int readBut()
+int readDirection()
 {
   if (bdelay > millis())
   {
     return 0;
   }
-  if (analogRead(A4) > 500)
+  if (analogRead(X_PIN) > 750)
   {
     //left
     bdelay = millis() + btsidedelay;    
     return 3;
   }
   
-  if (analogRead(A5) > 500)
+  if (analogRead(Y_PIN) > 750)
   {
     //down
     bdelay = millis() + btdowndelay;    
     return 4;
   }    
-  if (analogRead(A6) > 500)
+  if (analogRead(X_PIN) < 225)
   {
     //right
     bdelay = millis() + btsidedelay;
     return 2;
   }  
-  if (analogRead(A7) > 500)
+  if (analogRead(Y_PIN) < 225)
   {
     //up
     bdelay = millis() + buttondelay;
@@ -1042,68 +1014,35 @@ boolean space_right2()
   return true;
 }
 
-
-
-ISR(TIMER1_COMPA_vect){  //change the 0 to 1 for timer1 and 2 for timer2
-    LEDRefresh();
-}
-
 void LEDRefresh()
 {
     int i;
     int k;
-    ////////////////////////////////////////////////
-    // I soldered pins wrong. (12345670 instead of 01234567). 
-    // so this portion of code is to software correct this issue.
-    boolean tmpdisp[8][16];    
-    for (k=0;k<16;k++)
-    {
-      for(i=1;i<8;i++)
-      {
-        tmpdisp[i][k]=disp[i-1][k];
-      }
-      tmpdisp[0][k]=disp[7][k];      
-    }  
     //////////////////////////////////////////////
   
     for(i=0;i<8;i++)
-    {      
-      int j;
-      
-      if (i == 0) 
-        j = rowPin+7;      
-      else
-        j = rowPin+i-1; 
-             
+    {            
        byte upper = 0;
        int b;
        for(b = 0;b<8;b++)
        {
          upper <<= 1;
-         if (!tmpdisp[b][i]) upper |= 1;
+         if (disp[b][i]) upper |= 1;
        }
        
+       lc.setRow(0, i, upper);
+       
+       //Serial.print(upper);
        
        byte lower = 0;
        for(b = 0;b<8;b++)
        {
          lower <<= 1;
-         if (!tmpdisp[b][i+8]) lower |= 1;
+         if (disp[b][i+8]) lower |= 1;
        }
-
+       
+      lc.setRow(1, i, lower);
       
-      digitalWrite(j,LOW);      
-      digitalWrite(latchPin, LOW);
-      shiftOut(dataPin, clockPin, LSBFIRST, lower);      
-      shiftOut(dataPin, clockPin, LSBFIRST, upper);
-      digitalWrite(latchPin, HIGH);          
-      digitalWrite(rowPin+i,HIGH);         
-      delay(1);
+      //Serial.println(lower);
     } 
-    digitalWrite(rowPin+7,LOW);      
 }
-
-
-
-
-
